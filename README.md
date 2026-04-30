@@ -2,8 +2,6 @@
 
 A dimensional data warehouse and end-to-end ETL pipeline built for **SportsTV Germany**, an OTT platform that distributes amateur sporting event recordings. The project ingests streaming transactions from heterogeneous sources (an operational SQLite OLTP database and a flat CSV export), transforms them into a Kimball-style **star schema** on a cloud-hosted MySQL instance, and produces an automated business-intelligence report in R Markdown.
 
-> **Course:** CS5200 — Database Management Systems (Northeastern University, Fall 2025)
-> **Author:** Karthik Bharadwaj _(see [Credits](#credits) for project partner)_
 
 ---
 
