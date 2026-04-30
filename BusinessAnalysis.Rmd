@@ -1,0 +1,639 @@
+---
+title: "Analysis of Streaming Transactions"
+subtitle: "Based on Data Collected by SportsTV Germany"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: true
+    toc_depth: 2
+    number_sections: true
+    theme: paper
+    highlight: tango
+author: "Karthik Bharadwaj and Akshay Mambakkam Sridharan"
+---
+```{r setup, include=FALSE, author="Akshay Mambakkam Sridharan"}
+# Clean environment
+rm(list = ls())
+
+if (!require("DBI")) install.packages("DBI")
+if (!require("RMySQL")) install.packages("RMySQL")
+if (!require("knitr")) install.packages("knitr")
+if (!require("kableExtra")) install.packages("kableExtra")
+
+library(DBI)
+library(RMySQL)
+library(knitr)
+library(kableExtra)
+
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+```
+
+```{r connectMySql, include=FALSE, author="Akshay Mambakkam Sridharan"}
+connectToMySql <- function() {
+  db_host <- Sys.getenv("MYSQL_HOST")
+  db_port <- as.integer(Sys.getenv("MYSQL_PORT", unset = "3306"))
+  db_name <- Sys.getenv("MYSQL_DB")
+  db_user <- Sys.getenv("MYSQL_USER")
+  db_pwd  <- Sys.getenv("MYSQL_PWD")
+
+  if (any(c(db_host, db_name, db_user, db_pwd) == "")) {
+    stop("Missing MySQL credentials. Set MYSQL_HOST, MYSQL_PORT, MYSQL_DB, MYSQL_USER, MYSQL_PWD (e.g. in .Renviron).")
+  }
+
+  mySqlDB <- tryCatch({
+    dbConnect(RMySQL::MySQL(),
+              user = db_user,
+              password = db_pwd,
+              dbname = db_name,
+              host = db_host,
+              port = db_port)
+  }, error = function(e) {
+    cat("Error connecting to MySQL:", e$message, "\n")
+    stop("Could not connect to MySQL database")
+  })
+  
+  return(mySqlDB)
+}
+
+disconnectMySql <- function(mySqlDB) {
+  dbDisconnect(mySqlDB)
+}
+
+mysqlConn <- connectToMySql()
+```
+
+# Data Breakdown
+```{r executiveSummary, echo=FALSE, author="Akshay Mambakkam Sridharan"}
+summaryQuery <- "
+SELECT 
+  COUNT(*) as total_fact_rows,
+  SUM(transaction_count) as total_transactions,
+  SUM(total_minutes_streamed) as total_minutes,
+  SUM(total_minutes_streamed) / SUM(transaction_count) as avg_session_minutes,
+  SUM(completed_count) as completed_streams
+FROM fact_streaming_analytics
+"
+summaryData <- dbGetQuery(mysqlConn, summaryQuery)
+
+# Get date range from dimension table
+dateRangeQuery <- "SELECT MIN(date_value) as min_date, MAX(date_value) as max_date FROM dim_date"
+dateRange <- dbGetQuery(mysqlConn, dateRangeQuery)
+
+# Get dimension counts
+dimCountsQuery <- "
+SELECT 
+  (SELECT COUNT(*) FROM dim_country) as countries,
+  (SELECT COUNT(*) FROM dim_sport) as sports,
+  (SELECT COUNT(*) FROM dim_device) as devices,
+  (SELECT COUNT(*) FROM dim_quality) as quality_levels
+"
+dimCounts <- dbGetQuery(mysqlConn, dimCountsQuery)
+
+totalTransactions <- summaryData$total_transactions
+totalMinutes <- summaryData$total_minutes
+totalHours <- round(totalMinutes / 60, 0)
+avgSessionMinutes <- round(summaryData$avg_session_minutes, 1)
+completedStreams <- summaryData$completed_streams
+completionRate <- round((completedStreams / totalTransactions) * 100, 1)
+
+uniqueUsers <- dbGetQuery(mysqlConn, "SELECT stat_value FROM summary_stats WHERE stat_name = 'unique_users'")$stat_value
+```
+
+This report presents a comprehensive analysis of streaming transaction data for SportsTV Germany, a platform specializing in the distribution of amateur sporting event recordings. The dataset spans **`r dateRange$min_date`** through **`r dateRange$max_date`**, representing comprehensive platform activity stored in a **dimensional data warehouse** with partitioned fact tables.
+
+**Key Performance Metrics:**
+
+- **Total Streaming Transactions:** `r format(totalTransactions, big.mark = ",")`
+- **Total Hours Streamed:** `r format(totalHours, big.mark = ",")` hours
+- **Average Session Duration:** `r avgSessionMinutes` minutes
+- **Completion Rate:** `r completionRate`%
+- **Geographic Coverage:** `r dimCounts$countries` countries
+- **Sport Categories:** `r dimCounts$sports` sports
+- **Device Types:** `r dimCounts$devices` devices
+- **Quality Levels:** `r dimCounts$quality_levels` quality levels
+- **Unique Users:** `r format(uniqueUsers, big.mark = ",")`
+
+---
+
+# Growth of streaming transactions by streaming time and number of streaming events by sport
+```{r growthData, echo=FALSE, author="Akshay Mambakkam Sridharan"}
+# Query using dimension table joins
+growthQuery <- "
+SELECT 
+  d.year,
+  s.sport,
+  SUM(f.total_minutes_streamed) as total_minutes,
+  SUM(f.transaction_count) as total_transactions
+FROM fact_streaming_analytics f
+JOIN dim_date d ON f.date_key = d.date_id
+JOIN dim_sport s ON f.sport_key = s.sport_key
+GROUP BY d.year, s.sport
+ORDER BY d.year, s.sport
+"
+growthData <- dbGetQuery(mysqlConn, growthQuery)
+
+totalYears <- length(unique(growthData$year))
+minYear <- min(growthData$year)
+maxYear <- max(growthData$year)
+
+iceHockeyData <- growthData[growthData$sport == "Ice Hockey", ]
+inlineHockeyData <- growthData[growthData$sport == "Inline Hockey", ]
+skiJumpingData <- growthData[growthData$sport == "Ski Jumping", ]
+```
+
+This analysis covers a **`r totalYears`-year period** of streaming activity, with data collected from **`r minYear`** through **`r maxYear`**.
+
+## Growth in Streaming Events by Sport
+```{r growthEventsChart, echo=FALSE, fig.width=10, fig.height=6, author="Akshay Mambakkam Sridharan"}
+yMax <- max(growthData$total_transactions / 1000) * 1.1
+
+plot(iceHockeyData$year, iceHockeyData$total_transactions / 1000,
+     type = "b", col = "darkblue", lwd = 2, pch = 16, cex = 1.5,
+     xlab = "Year", ylab = "Number of Streaming Events (Thousands)",
+     main = "Growth in Streaming Events by Sport",
+     ylim = c(0, yMax))
+
+lines(inlineHockeyData$year, inlineHockeyData$total_transactions / 1000,
+      type = "b", col = "red", lwd = 2, pch = 17, cex = 1.5)
+
+lines(skiJumpingData$year, skiJumpingData$total_transactions / 1000,
+      type = "b", col = "steelblue", lwd = 2, pch = 18, cex = 1.5)
+
+legend("topleft", legend = c("Ice Hockey", "Inline Hockey", "Ski Jumping"),
+       col = c("darkblue", "red", "steelblue"), lwd = 2, pch = c(16, 17, 18), bty = "n")
+
+grid(col = "lightgray")
+```
+
+## Growth in Streaming Time by Sport
+```{r growthTimeChart, echo=FALSE, fig.width=10, fig.height=6, author="Karthik Bharadwaj"}
+yMaxTime <- max(growthData$total_minutes / 60000) * 1.1
+
+plot(iceHockeyData$year, iceHockeyData$total_minutes / 60000,
+     type = "b", col = "darkblue", lwd = 2, pch = 16, cex = 1.5,
+     xlab = "Year", ylab = "Total Hours Streamed (Thousands)",
+     main = "Growth in Streaming Time by Sport",
+     ylim = c(0, yMaxTime))
+
+lines(inlineHockeyData$year, inlineHockeyData$total_minutes / 60000,
+      type = "b", col = "red", lwd = 2, pch = 17, cex = 1.5)
+
+lines(skiJumpingData$year, skiJumpingData$total_minutes / 60000,
+      type = "b", col = "steelblue", lwd = 2, pch = 18, cex = 1.5)
+
+legend("topleft", legend = c("Ice Hockey", "Inline Hockey", "Ski Jumping"),
+       col = c("darkblue", "red", "steelblue"), lwd = 2, pch = c(16, 17, 18), bty = "n")
+
+grid(col = "lightgray")
+```
+
+## Year-over-Year Growth Summary
+```{r growthTable, echo=FALSE, author="Akshay Mambakkam Sridharan"}
+growthWide <- reshape(growthData[, c("year", "sport", "total_transactions")],
+                      idvar = "year",
+                      timevar = "sport",
+                      direction = "wide")
+
+colnames(growthWide) <- c("Year", "Ice Hockey", "Inline Hockey", "Ski Jumping")
+
+growthWide$Total <- rowSums(growthWide[, 2:4])
+
+kable(growthWide,
+      format = "html",
+      format.args = list(big.mark = ","),
+      caption = "Streaming Transactions by Sport and Year") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE) %>%
+  row_spec(0, bold = TRUE, background = "steelblue", color = "white")
+```
+```{r growthAnalysis, echo=FALSE, author="Karthik Bharadwaj"}
+totalBySport <- aggregate(total_transactions ~ sport, growthData, sum)
+topSport <- totalBySport[which.max(totalBySport$total_transactions), "sport"]
+topSportTotal <- totalBySport[which.max(totalBySport$total_transactions), "total_transactions"]
+
+totalByYear <- aggregate(total_transactions ~ year, growthData, sum)
+peakYear <- totalByYear[which.max(totalByYear$total_transactions), "year"]
+peakYearTotal <- totalByYear[which.max(totalByYear$total_transactions), "total_transactions"]
+```
+
+**Key Findings:** The data reveals that **`r topSport`** is the most popular sport on the platform, accounting for **`r format(topSportTotal, big.mark = ",")`** transactions. Streaming activity peaked in **`r peakYear`** with **`r format(peakYearTotal, big.mark = ",")`** transactions recorded.
+
+---
+
+# Number of streaming events per week for the most recent year
+```{r weeklyData, echo=FALSE, author="Karthik Bharadwaj"}
+recentYear <- maxYear
+
+weeklyQuery <- sprintf("
+SELECT 
+  d.week,
+  SUM(f.transaction_count) as total_transactions,
+  SUM(f.total_minutes_streamed) as total_minutes
+FROM fact_streaming_analytics f
+JOIN dim_date d ON f.date_key = d.date_id
+WHERE d.year = %d
+GROUP BY d.week
+ORDER BY d.week
+", recentYear)
+
+weeklyData <- dbGetQuery(mysqlConn, weeklyQuery)
+
+totalWeeks <- nrow(weeklyData)
+avgWeeklyTransactions <- round(mean(weeklyData$total_transactions), 0)
+peakWeek <- weeklyData$week[which.max(weeklyData$total_transactions)]
+peakWeekTransactions <- max(weeklyData$total_transactions)
+lowWeek <- weeklyData$week[which.min(weeklyData$total_transactions)]
+lowWeekTransactions <- min(weeklyData$total_transactions)
+```
+
+## Weekly Transaction Volume
+```{r weeklyChart, echo=FALSE, fig.width=12, fig.height=6, author="Karthik Bharadwaj"}
+barColors <- rep("steelblue", length(weeklyData$week))
+barColors[which.max(weeklyData$total_transactions)] <- "darkblue"
+barColors[which.min(weeklyData$total_transactions)] <- "red"
+
+barplot(weeklyData$total_transactions,
+        names.arg = weeklyData$week,
+        col = barColors,
+        xlab = "Week Number",
+        ylab = "Number of Transactions",
+        main = paste("Weekly Streaming Events in", recentYear),
+        las = 1,
+        border = NA)
+
+abline(h = avgWeeklyTransactions, col = "red", lty = 2, lwd = 2)
+
+legend("topright", 
+       legend = c("Peak Week", "Lowest Week", "Average"),
+       fill = c("darkblue", "red", NA),
+       border = c("darkblue", "red", NA),
+       lty = c(NA, NA, 2),
+       lwd = c(NA, NA, 2),
+       col = c(NA, NA, "red"),
+       bty = "n")
+
+grid(nx = NA, ny = NULL, col = "lightgray")
+```
+
+In **`r recentYear`**, the platform recorded **`r format(sum(weeklyData$total_transactions), big.mark = ",")`** streaming events totaling **`r format(round(sum(weeklyData$total_minutes) / 60), big.mark = ",")`** hours across **`r totalWeeks` weeks**. Weekly transactions averaged **`r format(avgWeeklyTransactions, big.mark = ",")`**, peaking at **`r format(peakWeekTransactions, big.mark = ",")`** in week **`r peakWeek`** and dropping to **`r format(lowWeekTransactions, big.mark = ",")`** in week **`r lowWeek`**.
+
+## Weekly Statistics Summary
+```{r weeklyStats, echo=FALSE, author="Karthik Bharadwaj"}
+weeklyStats <- data.frame(
+  Metric = c("Average Weekly Transactions", "Peak Week", "Peak Week Transactions", 
+             "Lowest Week", "Lowest Week Transactions", "Week-to-Week Variance"),
+  Value = c(format(avgWeeklyTransactions, big.mark = ","),
+            peakWeek,
+            format(peakWeekTransactions, big.mark = ","),
+            lowWeek,
+            format(lowWeekTransactions, big.mark = ","),
+            paste0(round(sd(weeklyData$total_transactions) / avgWeeklyTransactions * 100, 1), "%"))
+)
+
+kable(weeklyStats,
+      format = "html",
+      col.names = c("Metric", "Value"),
+      caption = paste("Weekly Streaming Statistics for", recentYear)) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE) %>%
+  row_spec(0, bold = TRUE, background = "steelblue", color = "white")
+```
+
+---
+
+# Average streaming time and total number of streams by sport and by country
+```{r sportCountryData, echo=FALSE, author="Karthik Bharadwaj"}
+sportCountryQuery <- "
+SELECT 
+  s.sport,
+  c.country,
+  SUM(f.transaction_count) as total_streams,
+  SUM(f.total_minutes_streamed) as total_minutes,
+  SUM(f.total_minutes_streamed) / SUM(f.transaction_count) as avg_minutes
+FROM fact_streaming_analytics f
+JOIN dim_sport s ON f.sport_key = s.sport_key
+JOIN dim_country c ON f.country_key = c.country_key
+GROUP BY s.sport, c.country
+ORDER BY s.sport, total_streams DESC
+"
+sportCountryData <- dbGetQuery(mysqlConn, sportCountryQuery)
+```
+
+## Average Streaming Duration by Sport and Country
+```{r avgDurationChart, echo=FALSE, fig.width=10, fig.height=6, author="Akshay Mambakkam Sridharan"}
+countries <- unique(sportCountryData$country)
+sports <- unique(sportCountryData$sport)
+
+avgMatrix <- matrix(0, nrow = length(sports), ncol = length(countries))
+rownames(avgMatrix) <- sports
+colnames(avgMatrix) <- countries
+
+for (i in 1:nrow(sportCountryData)) {
+  sport <- sportCountryData$sport[i]
+  country <- sportCountryData$country[i]
+  avgMatrix[sport, country] <- sportCountryData$avg_minutes[i]
+}
+
+barplot(avgMatrix,
+        beside = TRUE,
+        col = c("darkblue", "red", "steelblue"),
+        xlab = "Country",
+        ylab = "Average Minutes per Session",
+        main = "Average Streaming Duration by Sport and Country",
+        las = 1)
+
+legend("topright", legend = sports,
+       fill = c("darkblue", "red", "steelblue"), bty = "n")
+
+grid(nx = NA, ny = NULL, col = "lightgray")
+```
+
+## Total Streams by Sport and Country
+```{r totalStreamsChart, echo=FALSE, fig.width=10, fig.height=6, author="Akshay Mambakkam Sridharan"}
+totalMatrix <- matrix(0, nrow = length(sports), ncol = length(countries))
+rownames(totalMatrix) <- sports
+colnames(totalMatrix) <- countries
+
+for (i in 1:nrow(sportCountryData)) {
+  sport <- sportCountryData$sport[i]
+  country <- sportCountryData$country[i]
+  totalMatrix[sport, country] <- sportCountryData$total_streams[i]
+}
+
+barplot(totalMatrix / 1000,
+        beside = TRUE,
+        col = c("darkblue", "red", "steelblue"),
+        xlab = "Country",
+        ylab = "Total Streams (Thousands)",
+        main = "Total Streaming Volume by Sport and Country",
+        las = 1)
+
+legend("topright", legend = sports,
+       fill = c("darkblue", "red", "steelblue"), bty = "n")
+
+grid(nx = NA, ny = NULL, col = "lightgray")
+```
+
+## Detailed Statistics Table
+```{r sportCountryTable, echo=FALSE, author="Akshay Mambakkam Sridharan"}
+displayData <- sportCountryData[, c("sport", "country", "total_streams", "avg_minutes", "total_minutes")]
+displayData$total_hours <- round(displayData$total_minutes / 60, 0)
+displayData$avg_minutes <- round(displayData$avg_minutes, 1)
+
+kable(displayData[, c("sport", "country", "total_streams", "avg_minutes", "total_hours")],
+      format = "html",
+      format.args = list(big.mark = ","),
+      col.names = c("Sport", "Country", "Total Streams", "Avg Duration (min)", "Total Hours"),
+      caption = "Streaming Statistics by Sport and Country") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE) %>%
+  row_spec(0, bold = TRUE, background = "steelblue", color = "white")
+```
+
+---
+
+# Day of the week during which the most amount of content is streamed
+
+This section analyzes which days of the week generate the most streaming activity, aggregated over the past three years by sport and country.
+```{r dowData, echo=FALSE, author="Akshay Mambakkam Sridharan"}
+threeYearsAgo <- maxYear - 2
+
+dowQuery <- sprintf("
+SELECT 
+  d.day_of_week,
+  d.day_name,
+  s.sport,
+  c.country,
+  SUM(f.total_minutes_streamed) as total_minutes,
+  SUM(f.transaction_count) as total_transactions
+FROM fact_streaming_analytics f
+JOIN dim_date d ON f.date_key = d.date_id
+JOIN dim_sport s ON f.sport_key = s.sport_key
+JOIN dim_country c ON f.country_key = c.country_key
+WHERE d.year >= %d
+GROUP BY d.day_of_week, d.day_name, s.sport, c.country
+ORDER BY d.day_of_week, s.sport, c.country
+", threeYearsAgo)
+
+dowData <- dbGetQuery(mysqlConn, dowQuery)
+
+dayOrder <- c("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
+```
+
+Analysis period: **`r threeYearsAgo`** to **`r maxYear`** (3 years)
+
+## Overall Day of Week Patterns
+```{r overallDowChart, echo=FALSE, fig.width=10, fig.height=6, author="Akshay Mambakkam Sridharan"}
+overallDow <- aggregate(total_minutes ~ day_of_week + day_name, dowData, sum)
+overallDow <- overallDow[order(overallDow$day_of_week), ]
+
+barColors <- rep("steelblue", 7)
+barColors[which.max(overallDow$total_minutes)] <- "darkblue"
+
+barplot(overallDow$total_minutes / 60000,
+        names.arg = dayOrder,
+        col = barColors,
+        xlab = "Day of Week",
+        ylab = "Total Hours Streamed (Thousands)",
+        main = "Streaming Time by Day of Week (Past 3 Years)",
+        las = 1,
+        border = NA)
+
+abline(h = mean(overallDow$total_minutes) / 60000, col = "red", lty = 2, lwd = 2)
+
+legend("topright", legend = c("Peak Day", "Average"),
+       fill = c("darkblue", NA), border = c("darkblue", NA),
+       lty = c(NA, 2), lwd = c(NA, 2), col = c(NA, "red"), bty = "n")
+
+grid(nx = NA, ny = NULL, col = "lightgray")
+```
+```{r peakDayCalc, echo=FALSE, author="Karthik Bharadwaj"}
+peakDayIdx <- which.max(overallDow$total_minutes)
+peakDayName <- dayOrder[peakDayIdx]
+peakDayMinutes <- overallDow$total_minutes[peakDayIdx]
+peakDayHours <- round(peakDayMinutes / 60, 0)
+```
+
+**Peak Streaming Day:** `r peakDayName` with `r format(peakDayHours, big.mark = ",")` total hours streamed over the past three years.
+
+## Day of Week by Sport
+```{r dowBySportChart, echo=FALSE, fig.width=10, fig.height=6, author="Karthik Bharadwaj"}
+dowBySport <- aggregate(total_minutes ~ day_of_week + day_name + sport, dowData, sum)
+
+iceHockeyDow <- dowBySport[dowBySport$sport == "Ice Hockey", ]
+iceHockeyDow <- iceHockeyDow[order(iceHockeyDow$day_of_week), ]
+
+inlineHockeyDow <- dowBySport[dowBySport$sport == "Inline Hockey", ]
+inlineHockeyDow <- inlineHockeyDow[order(inlineHockeyDow$day_of_week), ]
+
+skiJumpingDow <- dowBySport[dowBySport$sport == "Ski Jumping", ]
+skiJumpingDow <- skiJumpingDow[order(skiJumpingDow$day_of_week), ]
+
+dowSportMatrix <- rbind(iceHockeyDow$total_minutes / 60000,
+                        inlineHockeyDow$total_minutes / 60000,
+                        skiJumpingDow$total_minutes / 60000)
+
+barplot(dowSportMatrix,
+        beside = TRUE,
+        names.arg = dayOrder,
+        col = c("darkblue", "red", "steelblue"),
+        xlab = "Day of Week",
+        ylab = "Total Hours Streamed (Thousands)",
+        main = "Streaming Time by Day of Week and Sport (Past 3 Years)",
+        las = 1)
+
+legend("topright", legend = c("Ice Hockey", "Inline Hockey", "Ski Jumping"),
+       fill = c("darkblue", "red", "steelblue"), bty = "n")
+
+grid(nx = NA, ny = NULL, col = "lightgray")
+```
+
+## Day of Week by Country
+```{r dowByCountryChart, echo=FALSE, fig.width=12, fig.height=8, author="Karthik Bharadwaj"}
+countries <- unique(dowData$country)
+par(mfrow = c(2, 2))
+
+for (ctry in countries) {
+  ctryData <- dowData[dowData$country == ctry, ]
+  ctryAgg <- aggregate(total_minutes ~ day_of_week + day_name, ctryData, sum)
+  ctryAgg <- ctryAgg[order(ctryAgg$day_of_week), ]
+  
+  barColors <- rep("steelblue", 7)
+  barColors[which.max(ctryAgg$total_minutes)] <- "darkblue"
+  
+  barplot(ctryAgg$total_minutes / 60000,
+          names.arg = dayOrder,
+          col = barColors,
+          main = ctry,
+          xlab = "Day of Week",
+          ylab = "Hours (Thousands)",
+          las = 1,
+          border = NA)
+  
+  grid(nx = NA, ny = NULL, col = "lightgray")
+}
+
+par(mfrow = c(1, 1))
+```
+
+## Peak Day Summary by Sport and Country
+```{r peakDaySummary, echo=FALSE, author="Karthik Bharadwaj"}
+peakDays <- do.call(rbind, lapply(split(dowData, list(dowData$sport, dowData$country)), function(df) {
+  if (nrow(df) == 0) return(NULL)
+  maxIdx <- which.max(df$total_minutes)
+  data.frame(
+    Sport = df$sport[1],
+    Country = df$country[1],
+    Peak_Day = df$day_name[maxIdx],
+    Total_Hours = round(df$total_minutes[maxIdx] / 60, 0)
+  )
+}))
+
+rownames(peakDays) <- NULL
+peakDays <- peakDays[order(peakDays$Sport, -peakDays$Total_Hours), ]
+
+kable(peakDays,
+      format = "html",
+      format.args = list(big.mark = ","),
+      col.names = c("Sport", "Country", "Peak Day", "Total Hours"),
+      caption = "Peak Streaming Day by Sport and Country (Past 3 Years)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE) %>%
+  row_spec(0, bold = TRUE, background = "steelblue", color = "white")
+```
+
+---
+
+# Device and Quality Analysis
+```{r deviceData, echo=FALSE, author="Karthik Bharadwaj"}
+deviceQuery <- "
+SELECT 
+  dv.device_type,
+  SUM(f.transaction_count) as total_streams,
+  SUM(f.total_minutes_streamed) as total_minutes,
+  SUM(f.total_minutes_streamed) / SUM(f.transaction_count) as avg_minutes
+FROM fact_streaming_analytics f
+JOIN dim_device dv ON f.device_key = dv.device_key
+GROUP BY dv.device_type
+ORDER BY total_streams DESC
+"
+deviceData <- dbGetQuery(mysqlConn, deviceQuery)
+
+qualityQuery <- "
+SELECT 
+  q.quality_streamed,
+  SUM(f.transaction_count) as total_streams,
+  SUM(f.total_minutes_streamed) as total_minutes
+FROM fact_streaming_analytics f
+JOIN dim_quality q ON f.quality_key = q.quality_key
+GROUP BY q.quality_streamed
+ORDER BY total_streams DESC
+"
+qualityData <- dbGetQuery(mysqlConn, qualityQuery)
+```
+
+## Streaming by Device Type
+```{r deviceChart, echo=FALSE, fig.width=10, fig.height=6, author="Karthik Bharadwaj"}
+deviceColors <- c("darkblue", "steelblue", "lightblue", "red", "darkred", "firebrick")
+deviceColors <- deviceColors[1:nrow(deviceData)]
+
+barplot(deviceData$total_streams / 1000,
+        names.arg = deviceData$device_type,
+        col = deviceColors,
+        xlab = "Device Type",
+        ylab = "Total Streams (Thousands)",
+        main = "Streaming Volume by Device Type",
+        las = 2,
+        border = NA)
+
+grid(nx = NA, ny = NULL, col = "lightgray")
+```
+```{r deviceTable, echo=FALSE, author="Karthik Bharadwaj"}
+deviceDisplay <- deviceData
+deviceDisplay$avg_minutes <- round(deviceDisplay$avg_minutes, 1)
+deviceDisplay$total_hours <- round(deviceDisplay$total_minutes / 60, 0)
+deviceDisplay$pct_share <- round(deviceDisplay$total_streams / sum(deviceDisplay$total_streams) * 100, 1)
+
+kable(deviceDisplay[, c("device_type", "total_streams", "avg_minutes", "total_hours", "pct_share")],
+      format = "html",
+      format.args = list(big.mark = ","),
+      col.names = c("Device Type", "Total Streams", "Avg Duration (min)", "Total Hours", "% Share"),
+      caption = "Streaming Statistics by Device Type") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE) %>%
+  row_spec(0, bold = TRUE, background = "steelblue", color = "white")
+```
+
+## Streaming by Quality
+```{r qualityChart, echo=FALSE, fig.width=10, fig.height=6, author="Karthik Bharadwaj"}
+qualityColors <- c("darkblue", "steelblue", "lightblue", "red", "darkred")
+qualityColors <- qualityColors[1:nrow(qualityData)]
+
+pie(qualityData$total_streams,
+    labels = paste0(qualityData$quality_streamed, "\n", 
+                   round(qualityData$total_streams / sum(qualityData$total_streams) * 100, 1), "%"),
+    col = qualityColors,
+    main = "Distribution of Streaming Quality",
+    border = "white")
+```
+```{r qualityTable, echo=FALSE, author="Karthik Bharadwaj"}
+qualityDisplay <- qualityData
+qualityDisplay$total_hours <- round(qualityDisplay$total_minutes / 60, 0)
+qualityDisplay$pct_share <- round(qualityDisplay$total_streams / sum(qualityDisplay$total_streams) * 100, 1)
+
+kable(qualityDisplay[, c("quality_streamed", "total_streams", "total_hours", "pct_share")],
+      format = "html",
+      format.args = list(big.mark = ","),
+      col.names = c("Quality Level", "Total Streams", "Total Hours", "% Share"),
+      caption = "Streaming Statistics by Quality Level") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE) %>%
+  row_spec(0, bold = TRUE, background = "steelblue", color = "white")
+```
+
+---
+```{r cleanup, include=FALSE, author="Akshay Mambakkam Sridharan"}
+disconnectMySql(mysqlConn)
+```

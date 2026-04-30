@@ -1,0 +1,34 @@
+# --- Secrets ---
+.Renviron
+.env
+.env.*
+!.Renviron.example
+!.env.example
+
+# --- R session / cache files ---
+.Rhistory
+.Rapp.history
+.RData
+.Ruserdata
+.Rproj.user/
+
+# --- knitr / rmarkdown caches ---
+*_cache/
+*_files/
+.Rmd.html
+
+# --- OS junk ---
+.DS_Store
+Thumbs.db
+
+# --- Editors ---
+.vscode/
+.idea/
+
+# --- Data files (too large or sensitive for git) ---
+# Keep this folder out of the repo; document where to obtain the data
+# in the README. Use Git LFS or external storage instead if you need
+# to share it.
+data/*.sqlitedb
+data/*.csv
+data/*.zip

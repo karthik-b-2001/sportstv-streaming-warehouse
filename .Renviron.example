@@ -1,0 +1,8 @@
+# Copy this file to `.Renviron` and fill in your own values.
+# `.Renviron` is auto-loaded by R at startup and is git-ignored.
+
+MYSQL_HOST=your-mysql-host.example.com
+MYSQL_PORT=3306
+MYSQL_DB=your_database_name
+MYSQL_USER=your_username
+MYSQL_PWD=your_password
