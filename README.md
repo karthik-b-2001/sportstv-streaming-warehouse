@@ -217,9 +217,7 @@ rmarkdown::render("BusinessAnalysis.Rmd")
 
 ---
 
-## Credits
+## Authors
 
-This was a two-person group project for CS5200 — Database Management Systems at Northeastern University (Fall 2025).
-
-- **Karthik Bharadwaj** — maintainer of this repository.
-- **Akshay Mambakkam Sridharan** — project partner; co-authored the schema design, ETL pipeline, and BI report.
+- [Karthik Bharadwaj](https://github.com/karthik-b-2001)
+- [Akshay Mambakkam Sridharan](https://github.com/Akshay-Mambakkam-Sridharan)
