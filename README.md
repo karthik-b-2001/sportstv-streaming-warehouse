@@ -3,7 +3,7 @@
 A dimensional data warehouse and end-to-end ETL pipeline built for **SportsTV Germany**, an OTT platform that distributes amateur sporting event recordings. The project ingests streaming transactions from heterogeneous sources (an operational SQLite OLTP database and a flat CSV export), transforms them into a Kimball-style **star schema** on a cloud-hosted MySQL instance, and produces an automated business-intelligence report in R Markdown.
 
 > **Course:** CS5200 — Database Management Systems (Northeastern University, Fall 2025)
-> **Authors:** Karthik Bharadwaj, Akshay Mambakkam Sridharan
+> **Author:** Karthik Bharadwaj _(see [Credits](#credits) for project partner)_
 
 ---
 
@@ -214,3 +214,12 @@ rmarkdown::render("BusinessAnalysis.Rmd")
 - **Why aggregate at ETL time?** The fact grain (date × country × sport × device × quality) collapses millions of raw transactions into a much smaller fact table while preserving all dimensions needed for the report — trading some flexibility for major query-time speedups.
 - **Why surrogate keys?** Insulates the warehouse from source-system key changes, supports slowly changing dimensions in the future, and keeps fact-table rows narrow.
 - **Why join inside the source DB during extraction?** Pushing the `streaming_txns ⋈ assets ⋈ countries` join down to SQLite is dramatically faster than pulling raw tables into R and joining in memory.
+
+---
+
+## Credits
+
+This was a two-person group project for CS5200 — Database Management Systems at Northeastern University (Fall 2025).
+
+- **Karthik Bharadwaj** — maintainer of this repository.
+- **Akshay Mambakkam Sridharan** — project partner; co-authored the schema design, ETL pipeline, and BI report.
